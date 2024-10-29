@@ -1,4 +1,6 @@
 import torch
+from ..kernels.liger.fused_linear_cross_entropy_loss import LigerFusedLinearCrossEntropyFunction
+from torch.nn import CrossEntropyLoss
 
 
 FIFO = []
@@ -11,11 +13,6 @@ def build_lm_head_forward():
         FIFO.append(shift_hidden_states)
         return logits
     return lm_head_forward
-
-from ..kernels.liger.fused_linear_cross_entropy_loss import LigerFusedLinearCrossEntropyFunction
-    
-
-from torch.nn import CrossEntropyLoss
 
 def build_fused_cross_entropy_class(model: torch.nn.Module):
 

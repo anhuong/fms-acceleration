@@ -87,6 +87,33 @@ def test_simple_forward_rule_with_mp_replaces_old_forward():
 
             assert model.submodule_1.forward() == "patched_forward_function"
 
+def test_patch_loss_function_replaces_old_loss():
+    def patched_loss_function(X):
+        return "patched_loss_function"
+
+    # 1. Create an instance of Module4Class as model
+    # 2. Add a submodule to Module4Class
+    # 3. Create and register rule to patch forward of submodule class
+    # 4. Patch model
+    # 5. Ensure that model's submodule forward is replaced
+    with isolate_test_module_fixtures():
+        with instantiate_model_patcher():
+            model = module4.Module4Class()
+            SubModule1 = create_module_class(
+                "SubModule1",
+                namespaces={"loss_function": lambda self: "unpatched_loss_function"},
+            )
+            model.add_module("submodule_1", SubModule1())
+            rule = ModelPatcherRule(
+                rule_id=DUMMY_RULE_ID,
+                trigger=ModelPatcherTrigger(check=SubModule1),
+                loss_function=patched_loss_function,
+            )
+            ModelPatcher.register(rule)
+            ModelPatcher.patch(model)
+
+            assert model.submodule_1.loss_function() == "patched_loss_function"
+
 
 def test_import_and_maybe_reload_rule_with_mp_replaces_old_attribute():
     """

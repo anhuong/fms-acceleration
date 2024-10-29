@@ -34,6 +34,7 @@ from ..kernels.unsloth.cross_entropy_loss import FastCrossEntropyLoss
 from ..kernels.unsloth.rms_layernorm import fast_rms_layernorm
 from ..kernels.unsloth.rope_embedding import fast_rope_embedding
 from ..kernels.liger.fused_linear_cross_entropy_loss import lce_forward
+from ..kernels.liger.fused_linear_cross_entropy_patch import build_lm_head_forward, build_fused_cross_entropy_class
 from .utils import KEY_MLP, KEY_O, KEY_QKV, build_lora_fused_ops, trigger_fused_ops
 
 def get_mp_rules(base_type: str):
@@ -107,11 +108,19 @@ def get_mp_rules(base_type: str):
                 base_type=base_type,
             ),
         ),
+        # patch the lm_head forward
         ModelPatcherRule(
             rule_id="llama-fused-lce",
             trigger=ModelPatcherTrigger(check=LlamaForCausalLM),
-            forward=lce_forward,
+            forward_builder=build_lm_head_forward
         ),
+        ModelPatcherRule(
+            rule_id="llama-fused-lce-loss",
+            trigger=ModelPatcherTrigger(check=LlamaForCausalLM),
+            loss_function=build_fused_cross_entropy_class
+        ),
+        # TODO: have a generic version of this rule
+        # - get the module_name and reload on that
         ModelPatcherRule(
             rule_id="llama-cross-ent",
             import_and_maybe_reload=(

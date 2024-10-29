@@ -136,6 +136,7 @@ class ModelPatcherTrigger:
 
 # type for model forward
 ModelForward = Callable
+ModelLossFunction = Callable
 
 
 @dataclass
@@ -151,6 +152,13 @@ class ModelPatcherRule:
     # will be helpful to
     # - do any pre-modification on the torch module
 
+    loss_function: ModelLossFunction = None
+
+    loss_function_builder: Callable[
+        [torch.nn.Module],
+        Union[ModelLossFunction, List[Tuple[ModelPatcherTrigger, ModelLossFunction]]],
+    ] = None
+
     # this is mutually exclusive from forward_builder
     forward: ModelForward = None
 
@@ -165,6 +173,7 @@ class ModelPatcherRule:
     # if specified, these will be passed on frrom ModelPatcher.patch
     # (if they exist)
     forward_builder_args: List[str] = None
+    loss_function_builder_args: List[str] = None
 
     # this is mutually exclusive from forward and forward builder
     import_and_maybe_reload: Tuple[
@@ -182,13 +191,15 @@ class ModelPatcherRule:
                     self.forward is not None,
                     self.forward_builder is not None,
                     self.import_and_maybe_reload is not None,
+                    self.loss_function is not None,
+                    self.loss_function_builder is not None,
                 ]
             )
             != 1
         ):
             raise ValueError(
                 f"Rule '{self.rule_id}' must only have only one of forward, "
-                "foward builder, or import_and_maybe_reload, specified."
+                "foward builder, loss_function, loss function builder, or import_and_maybe_reload, specified."
             )
 
         if self.import_and_maybe_reload is not None and self.trigger is not None:
@@ -285,6 +296,11 @@ class ModelPatcher:
                 # for simple forward patches. forward_builder args are handled
                 # when they are decomposed into new simple forward rules
                 elif rule.forward is not None:
+                    warnings.warn(
+                        f"rule {rule.rule_id} is ignored on {module_name} as an \
+                        earlier rule {active_rule.rule_id} has been applied"
+                    )
+                elif rule.loss_function is not None:
                     warnings.warn(
                         f"rule {rule.rule_id} is ignored on {module_name} as an \
                         earlier rule {active_rule.rule_id} has been applied"
@@ -423,6 +439,7 @@ class ModelPatcher:
                 continue
 
             # otherwise triggered
+            forward = None
             if rule.forward is not None:
                 forward = rule.forward
             else:
@@ -433,7 +450,11 @@ class ModelPatcher:
                         for k, w in patch_kwargs.items()
                         if rule.forward_builder_args
                     }
-                forward = rule.forward_builder(mod, **fba)
+                if rule.forward_builder:
+                    forward = rule.forward_builder(mod, **fba)
+
+            if forward is None:
+                continue
 
             if isinstance(forward, list):
                 # this will be list of tuples case
@@ -481,6 +502,110 @@ class ModelPatcher:
             )
 
     @staticmethod
+    def _patch_loss_function(
+        model: torch.nn.Module,
+        patch_kwargs: Dict = None,
+        visited: Set = None,
+        parent_prefix: str = None,
+        parent_mcn: str = None,
+    ):
+        # NOTE: should we avoid repatching of the forwards
+
+        if patch_kwargs is None:
+            patch_kwargs = {}
+
+        if visited is None:
+            visited = set()
+
+        for name, mod in model.named_modules():
+
+            # some stats
+            mod_id = id(mod)
+            mod_class_name = mod.__class__.__name__
+            name = name.split(".")
+            if len(name) > 2:
+                parent_module_name, module_name = ".".join(name[:-1]), name[-1]
+                parent_mod = model.get_submodule(parent_module_name)
+                parent_mod_class_name = parent_mod.__class__.__name__
+            else:
+                # patching on model itself
+                module_name = name[0]
+                parent_mod_class_name = parent_module_name = ""
+                if parent_prefix is not None:
+                    parent_module_name = parent_prefix + "." + parent_module_name
+                if parent_mcn is not None:
+                    parent_mod_class_name = parent_mcn
+
+            rule_id, rule = ModelPatcher.did_rule_trigger(mod, module_name)
+            if rule_id is None:
+                continue
+
+            # otherwise triggered
+            loss_function = None
+            if rule.loss_function is not None:
+                loss_function = rule.loss_function
+            else:
+                fba = {}
+                if rule.loss_function_builder_args is not None:
+                    fba = {
+                        k: w
+                        for k, w in patch_kwargs.items()
+                        if rule.loss_function_builder_args
+                    }
+                if rule.loss_function_builder is not None:
+                    loss_function = rule.loss_function_builder(mod, **fba)
+
+            if loss_function is None:
+                continue
+
+            if isinstance(loss_function, list):
+                # this will be list of tuples case
+
+                # will descend down but
+                # - clear old rules
+                # - replace new rules
+                old_rules = ModelPatcher.rules
+                ModelPatcher.rules = {}
+                for i, (trig, loss_function) in enumerate(loss_function):
+                    ModelPatcher.register(
+                        ModelPatcherRule(
+                            rule_id=f"{rule_id}-{i+1}",
+                            trigger=trig,
+                            loss_function=loss_function,
+                        )
+                    )
+
+                # this is an isolated patch
+                ModelPatcher.patch(
+                    mod,
+                    patch_kwargs=patch_kwargs,
+                    visited=visited,
+                    parent_prefix=parent_module_name,
+                    parent_mcn=parent_mod_class_name,
+                )
+
+                # replace the rules
+                ModelPatcher.rules = old_rules
+
+                # done
+                continue
+
+            # otherwise
+            if hasattr(mod, "loss_function"):
+                mod.loss_function = MethodType(loss_function, mod)
+                # setattr(mod, str(method), MethodType(method, mod))
+                ModelPatcher.history.append(
+                    ModelPatcherHistory(
+                        instance=mod_id,
+                        cls=mod_class_name,
+                        parent_cls=parent_mod_class_name,
+                        module_name=module_name,
+                        parent_module_name=parent_module_name,
+                        rule_id=rule_id,
+                    )
+                )
+
+    @staticmethod
     def patch(model: torch.nn.Module, **kwargs):
         # NOTE: for a set of rules, this patch function should be called
         # only once. We do not have any checks for this at the moment
@@ -492,6 +617,8 @@ class ModelPatcher:
 
         # this will patch the forwards
         ModelPatcher._patch_forwards(model, patch_kwargs=kwargs)
+        # this will patch loss functions
+        ModelPatcher._patch_loss_function(model, patch_kwargs=kwargs)
 
     @staticmethod
     def summary(raw: bool = False):
