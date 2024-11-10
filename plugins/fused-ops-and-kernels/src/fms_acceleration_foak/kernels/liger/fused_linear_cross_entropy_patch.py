@@ -1,11 +1,11 @@
 import torch
-from ..kernels.liger.fused_linear_cross_entropy_loss import LigerFusedLinearCrossEntropyFunction
+from ..liger.fused_linear_cross_entropy_loss import LigerFusedLinearCrossEntropyFunction
 from torch.nn import CrossEntropyLoss
 
 
 FIFO = []
 
-def build_lm_head_forward():
+def build_lm_head_forward(model: torch.nn.Module):
     def lm_head_forward(self, hidden_states: torch.Tensor):
         shift_hidden_states = hidden_states[..., :-1, :].contiguous()
         shift_hidden_states = shift_hidden_states.view(-1, shift_hidden_states.shape[-1])
