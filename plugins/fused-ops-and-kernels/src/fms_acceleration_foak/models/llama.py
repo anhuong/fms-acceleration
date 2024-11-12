@@ -15,6 +15,8 @@
 # Standard
 from functools import partial
 
+import torch
+
 # Third Party
 from fms_acceleration.model_patcher import (
     ModelPatcherRule,
@@ -111,7 +113,10 @@ def get_mp_rules(base_type: str):
         # patch the lm_head forward
         ModelPatcherRule(
             rule_id="llama-fused-lce",
-            trigger=ModelPatcherTrigger(check=LlamaForCausalLM),
+            trigger=ModelPatcherTrigger(
+                check=torch.nn.Linear,
+                module_name="LlamaForCausalLM",
+            ),
             forward_builder=build_lm_head_forward
         ),
         ModelPatcherRule(

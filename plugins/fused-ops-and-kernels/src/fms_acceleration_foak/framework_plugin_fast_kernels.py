@@ -74,7 +74,7 @@ FILTER_MAP = {
     "fast_loss": "cross-ent",
     "fast_rms_layernorm": "rms",
     "fast_rope_embeddings": "rope",
-    "fused_linear_loss": "fused-lce",
+    "fused_linear_loss": {"fused-lce","fused-lce-loss"},
 }
 
 
